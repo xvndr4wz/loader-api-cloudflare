@@ -1,0 +1,6 @@
+name = "ndraawzontop-pages"
+compatibility_date = "2026-06-10"
+
+[[kv_namespaces]]
+binding = "ndraawzontop"
+id = "456fbd4b809a4d42abeab118350c6382"
