@@ -1,5 +1,4 @@
-// functions/api/loader/[[path]].js - Cloudflare Pages Functions
-// LOADER DENGAN MULTI-LAYER PROTECTION MENGGUNAKAN KV (Binding: ndraawzontop)
+import kvHelper from '../../helper/kv-helper.js';
 
 const SETTINGS = {
     TOTAL_LAYERS: 5,
@@ -91,7 +90,7 @@ function obfuscateUrl(url) {
     });
 
     // Nama variabel acak 2-3 huruf hindari keyword lua
-    const luaKeywords = ['do', 'if', 'in', 'or', 'and', 'end', 'for', 'nil', 'not', 'repeat', 'then', 'true', 'false', 'local', 'while', 'break', 'else', 'elseif', 'function', 'return', 'until'];
+    const luaKeywords = ['do','if','in','or','and','end','for','nil','not','repeat','then','true','false','local','while','break','else','elseif','function','return','until'];
     const chars = 'abcdefghijklmnopqrstuvwxyz';
     let varName = '';
     do {
@@ -108,94 +107,19 @@ function obfuscateUrl(url) {
     return `local ${varName}={${arrayStr}}loadstring(game:HttpGet(${concatStr}))()`;
 }
 
-// ========== FUNGSI SESSION DENGAN KV (Binding: ndraawzontop) ==========
-async function saveSessionToKV(env, sessionId, sessionData) {
-    try {
-        await env['ndraawzontop'].put(`session:${sessionId}`, JSON.stringify(sessionData), {
-            expirationTtl: 30
-        });
-        return true;
-    } catch (e) {
-        return false;
-    }
-}
-
-async function getSessionFromKV(env, sessionId) {
-    try {
-        const data = await env['ndraawzontop'].get(`session:${sessionId}`);
-        if (!data) return null;
-        return JSON.parse(data);
-    } catch (e) {
-        return null;
-    }
-}
-
-async function deleteSessionFromKV(env, sessionId) {
-    try {
-        await env['ndraawzontop'].delete(`session:${sessionId}`);
-        return true;
-    } catch (e) {
-        return false;
-    }
-}
-
-async function saveRateLimitToKV(env, ip, data) {
-    try {
-        await env['ndraawzontop'].put(`ratelimit:${ip}`, JSON.stringify(data), {
-            expirationTtl: 15
-        });
-        return true;
-    } catch (e) {
-        return false;
-    }
-}
-
-async function getRateLimitFromKV(env, ip) {
-    try {
-        const data = await env['ndraawzontop'].get(`ratelimit:${ip}`);
-        if (!data) return null;
-        return JSON.parse(data);
-    } catch (e) {
-        return null;
-    }
-}
-
-// ========== SESSION MAKER ==========
-async function makeSession(env, ownerIp, stepSequence, currentIndex) {
-    const now = Date.now();
-    const ipPart = ownerIp.split('.').pop() || "0";
-    const seed = parseInt(ipPart) + Math.floor(Math.random() * 10000);
-    const newSessionID = seed.toString(36).substring(0, 4).padEnd(4, 'x');
-    const nextKey = Math.random().toString(36).substring(2, 8);
-
-    const sessionData = {
-        ownerIP: ownerIp,
-        stepSequence: stepSequence,
-        currentIndex: currentIndex,
-        nextKey: nextKey,
-        lastTime: now,
-        used: false
-    };
-
-    await saveSessionToKV(env, newSessionID, sessionData);
-    return { newSessionID, nextKey };
-}
-
-// ========== EXPIRE SESSION ==========
-async function expireSession(env, id) {
-    const session = await getSessionFromKV(env, id);
-    if (session) {
-        session.used = true;
-        await saveSessionToKV(env, id, session);
-        setTimeout(async () => {
-            await deleteSessionFromKV(env, id);
-        }, SETTINGS.SESSION_TTL);
-    }
-}
-
 // ========== HANDLER CLOUDFLARE PAGES ==========
 export async function onRequest(context) {
     const { request, env } = context;
+
+    // ========== INIT KV HELPER ==========
+    const kv = kvHelper(env['ndraawzontop']);
+    const { 
+        makeSession, 
+        getSession, 
+        expireSession, 
+        getRateLimit, 
+        saveRateLimit 
+    } = kv;
 
     const headers = {
         'Content-Type': 'text/plain',
@@ -215,19 +139,15 @@ export async function onRequest(context) {
     }
 
     const now = Date.now();
-
-    // Get IP
-    const clientIp = request.headers.get('cf-connecting-ip') ||
-                    request.headers.get('x-forwarded-for')?.split(',')[0] ||
-                    request.headers.get('x-real-ip') ||
-                    "unknown";
-    const cleanIp = clientIp.replace('::ffff:', '').trim();
-
-    // Get User-Agent
+    const ip = request.headers.get('cf-connecting-ip') ||
+               request.headers.get('x-forwarded-for')?.split(',')[0] ||
+               request.headers.get('x-real-ip') ||
+               "unknown";
     const agent = request.headers.get('user-agent') || "";
+    const cleanIp = ip.replace('::ffff:', '').trim();
 
     // ========== CEK USER-AGENT ==========
-    const isRoblox = agent.includes("Roblox") &&
+    const isRoblox = agent.includes("Roblox") && 
                      (request.headers.get('roblox-id') || 
                       request.headers.get('x-roblox-place-id') || 
                       agent.includes("RobloxApp"));
@@ -244,35 +164,32 @@ export async function onRequest(context) {
 
     // ========== PARSE URL ==========
     const url = new URL(request.url);
-    const pathname = url.pathname;
-    const search = url.search;
+    const urlParts = url.pathname;
+    const queryString = url.search || "";
+    const params = queryString ? queryString.replace('?', '').split('.') : [];
 
-    const params = search ? search.replace('?', '').split('.') : [];
     const step = params[0] || '0';
     const id = params[1] || '';
     const key = params[2] || '';
 
     const currentStep = parseInt(step) || 0;
     const host = request.headers.get('host') || 'your-domain.pages.dev';
+    const currentPath = url.pathname;
 
     try {
         // ========== STEP 0: RATE LIMIT + INIT SESSION ==========
         if (currentStep === 0) {
-            // Rate limit check
-            let rateData = await getRateLimitFromKV(env, cleanIp);
+            let rateData = await getRateLimit(cleanIp);
 
-            if (!rateData) {
-                rateData = { count: 1, firstRequestAt: now };
-                await saveRateLimitToKV(env, cleanIp, rateData);
-            } else {
+            if (rateData) {
                 const elapsed = now - rateData.firstRequestAt;
+                const sisaCooldown = Math.ceil((SETTINGS.RATE_LIMIT_MS - elapsed) / 1000);
 
                 if (elapsed < SETTINGS.RATE_LIMIT_MS) {
                     rateData.count++;
-                    await saveRateLimitToKV(env, cleanIp, rateData);
+                    await saveRateLimit(cleanIp, rateData);
 
                     if (rateData.count > SETTINGS.RATE_LIMIT_MAX) {
-                        const sisaCooldown = Math.ceil((SETTINGS.RATE_LIMIT_MS - elapsed) / 1000);
                         await sendSecurityLogToLogJs(
                             `🚨 **SPAM DETECTED**\n` +
                             `📡 **IP:** \`${cleanIp}\`\n` +
@@ -289,8 +206,11 @@ export async function onRequest(context) {
                     }
                 } else {
                     rateData = { count: 1, firstRequestAt: now };
-                    await saveRateLimitToKV(env, cleanIp, rateData);
+                    await saveRateLimit(cleanIp, rateData);
                 }
+            } else {
+                rateData = { count: 1, firstRequestAt: now };
+                await saveRateLimit(cleanIp, rateData);
             }
 
             // Generate sequence
@@ -300,17 +220,16 @@ export async function onRequest(context) {
                 if (!sequence.includes(r)) sequence.push(r);
             }
 
-            const { newSessionID, nextKey } = await makeSession(env, cleanIp, sequence, 0);
-            const nextUrl = `https://${host}${pathname}?${sequence[0]}.${newSessionID}.${nextKey}`;
-
+            const { newSessionID, nextKey } = await makeSession(cleanIp, sequence, 0);
+            const nextUrl = "https://" + host + currentPath + "?" + sequence[0] + "." + newSessionID + "." + nextKey;
             return new Response(obfuscateUrl(nextUrl), {
                 status: 200,
                 headers
             });
         }
 
-        // ========== VALIDASI SESSION ==========
-        const session = await getSessionFromKV(env, id);
+        // ========== VALIDASI HANDSHAKE ==========
+        const session = await getSession(id);
 
         if (!session || session.ownerIP !== cleanIp) {
             const plainResp = await fetchRaw(SETTINGS.PLAIN_TEXT_URL);
@@ -320,9 +239,9 @@ export async function onRequest(context) {
             });
         }
 
-        // Cek step
+        // ========== CEK STEP ==========
         if (currentStep !== session.stepSequence[session.currentIndex]) {
-            await expireSession(env, id);
+            await expireSession(id);
             return new Response("SECURITY : BANNED ACCESS!", {
                 status: getRandomError(),
                 headers
@@ -356,7 +275,7 @@ export async function onRequest(context) {
                 cleanIp,
                 "invalid_key"
             );
-            await expireSession(env, id);
+            await expireSession(id);
             return new Response("SECURITY : BANNED ACCESS!", {
                 status: getRandomError(),
                 headers
@@ -368,7 +287,7 @@ export async function onRequest(context) {
         // ========== LAYER TERAKHIR: MAIN SCRIPT ==========
         if (idx === SETTINGS.TOTAL_LAYERS - 1) {
             const mainScript = await fetchRaw(SETTINGS.REAL_SCRIPT_URL);
-            await expireSession(env, id);
+            await expireSession(id);
             return new Response(mainScript || '', {
                 status: 200,
                 headers
@@ -379,11 +298,11 @@ export async function onRequest(context) {
         if (idx === SETTINGS.TOTAL_LAYERS - 2) {
             const nextIdx = SETTINGS.TOTAL_LAYERS - 1;
             const nextStepNumber = session.stepSequence[nextIdx];
-            const { newSessionID, nextKey } = await makeSession(env, session.ownerIP, session.stepSequence, nextIdx);
-            await expireSession(env, id);
+            const { newSessionID, nextKey } = await makeSession(session.ownerIP, session.stepSequence, nextIdx);
+            await expireSession(id);
 
             const loggerScript = await fetchRaw(SETTINGS.LOGGER_SCRIPT_URL);
-            const nextUrl = `https://${host}${pathname}?${nextStepNumber}.${newSessionID}.${nextKey}`;
+            const nextUrl = "https://" + host + currentPath + "?" + nextStepNumber + "." + newSessionID + "." + nextKey;
 
             const luaScript = obfuscateUrl(nextUrl) + "\n" + (loggerScript || '');
             return new Response(luaScript, {
@@ -395,10 +314,10 @@ export async function onRequest(context) {
         // ========== LAYER BIASA: REDIRECT ==========
         const nextIdx = idx + 1;
         const nextStepNumber = session.stepSequence[nextIdx];
-        const { newSessionID, nextKey } = await makeSession(env, session.ownerIP, session.stepSequence, nextIdx);
-        await expireSession(env, id);
+        const { newSessionID, nextKey } = await makeSession(session.ownerIP, session.stepSequence, nextIdx);
+        await expireSession(id);
 
-        const nextUrl = `https://${host}${pathname}?${nextStepNumber}.${newSessionID}.${nextKey}`;
+        const nextUrl = "https://" + host + currentPath + "?" + nextStepNumber + "." + newSessionID + "." + nextKey;
         return new Response(obfuscateUrl(nextUrl), {
             status: 200,
             headers
@@ -412,4 +331,4 @@ export async function onRequest(context) {
             headers
         });
     }
-}
+        }
