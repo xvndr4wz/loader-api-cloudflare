@@ -1,5 +1,4 @@
-// functions/api/loader/kv-helper.js
-// HELPER DENGAN PREFIX UNTUK MULTIPLE KV
+import kvHelper from '../../helper/kv-helper.js';
 
 const SETTINGS = {
     SESSION_TTL: 10000,
@@ -7,8 +6,6 @@ const SETTINGS = {
 };
 
 export default function(kv) {
-    // ========== SESSION FUNCTIONS (Prefix: session:) ==========
-    
     async function saveSession(sessionId, sessionData) {
         try {
             await kv.put(`session:${sessionId}`, JSON.stringify(sessionData), {
@@ -39,8 +36,6 @@ export default function(kv) {
         }
     }
 
-    // ========== RATE LIMIT FUNCTIONS (Prefix: ratelimit:) ==========
-    
     async function saveRateLimit(ip, data) {
         try {
             await kv.put(`ratelimit:${ip}`, JSON.stringify(data), {
@@ -62,28 +57,6 @@ export default function(kv) {
         }
     }
 
-    // ========== FUNGSI UNTUK LIST ALL SESSIONS ==========
-    async function listAllSessions() {
-        try {
-            const { keys } = await kv.list({ prefix: 'session:' });
-            return keys.map(key => key.name);
-        } catch (e) {
-            return [];
-        }
-    }
-
-    // ========== FUNGSI UNTUK LIST ALL RATE LIMITS ==========
-    async function listAllRateLimits() {
-        try {
-            const { keys } = await kv.list({ prefix: 'ratelimit:' });
-            return keys.map(key => key.name);
-        } catch (e) {
-            return [];
-        }
-    }
-
-    // ========== SESSION MAKER ==========
-    
     async function makeSession(ownerIp, stepSequence, currentIndex) {
         const now = Date.now();
         const ipPart = ownerIp.split('.').pop() || "0";
@@ -104,8 +77,6 @@ export default function(kv) {
         return { newSessionID, nextKey };
     }
 
-    // ========== EXPIRE SESSION ==========
-    
     async function expireSession(id) {
         const session = await getSession(id);
         if (session) {
@@ -117,23 +88,10 @@ export default function(kv) {
         }
     }
 
-    // ========== CLEANUP (Manual) ==========
     async function cleanup() {
-        // Hapus session yang sudah expired
-        // KV sudah auto-expire, tapi ini untuk manual cleanup
-        const sessions = await listAllSessions();
-        for (const key of sessions) {
-            const data = await kv.get(key);
-            if (data) {
-                const parsed = JSON.parse(data);
-                if (parsed.used && (Date.now() - parsed.lastTime > SETTINGS.SESSION_TTL)) {
-                    await kv.delete(key);
-                }
-            }
-        }
+        return true;
     }
 
-    // ========== EXPORT ==========
     return {
         saveSession,
         getSession,
@@ -142,8 +100,6 @@ export default function(kv) {
         getRateLimit,
         makeSession,
         expireSession,
-        cleanup,
-        listAllSessions,
-        listAllRateLimits
+        cleanup
     };
-    }
+                }
