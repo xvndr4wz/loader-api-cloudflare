@@ -1,5 +1,3 @@
-import kvHelper from '../../helper/kv-helper.js';
-
 const SETTINGS = {
     SESSION_TTL: 10000,
     RATE_LIMIT_MS: 10000
@@ -102,4 +100,4 @@ export default function(kv) {
         expireSession,
         cleanup
     };
-                }
+}
