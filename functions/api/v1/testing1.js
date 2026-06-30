@@ -45,9 +45,11 @@ async function sendSecurityLogToLogJs(message, ip, type) {
     }
 }
 
-// ========== OBFUSCATE DENGAN TASK.SPAWN ==========
 function obfuscateUrl(url) {
+    // Pastikan URL hanya mengandung karakter aman
     const safeUrl = url.trim();
+
+    // Split jadi potongan 2-4 karakter
     const parts = [];
     let i = 0;
     while (i < safeUrl.length) {
@@ -56,13 +58,17 @@ function obfuscateUrl(url) {
         i += len;
     }
 
+    // Shuffle index
     const indices = [...Array(parts.length).keys()];
     for (let i = indices.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [indices[i], indices[j]] = [indices[j], indices[i]];
     }
 
+    // Array isi acak berdasarkan shuffle
     const shuffledParts = indices.map(i => parts[i]);
+
+    // Escape semua karakter berbahaya
     const arrayStr = shuffledParts.map(p => {
         const escaped = p
             .replace(/\\/g, '\\\\')
@@ -73,11 +79,13 @@ function obfuscateUrl(url) {
         return `'${escaped}'`;
     }).join(',');
 
+    // Mapping posisi asli ke posisi shuffled
     const orderMap = new Array(parts.length);
     indices.forEach((originalIdx, shuffledIdx) => {
         orderMap[originalIdx] = shuffledIdx + 1;
     });
 
+    // Nama variabel acak 2-3 huruf hindari keyword lua
     const luaKeywords = ['do','if','in','or','and','end','for','nil','not','repeat','then','true','false','local','while','break','else','elseif','function','return','until'];
     const chars = 'abcdefghijklmnopqrstuvwxyz';
     let varName = '';
@@ -89,6 +97,7 @@ function obfuscateUrl(url) {
         }
     } while (luaKeywords.includes(varName));
 
+    // Concat acak
     const concatStr = orderMap.map(i => `${varName}[${i}]`).join('..');
 
     // ========== BUNGKUS DENGAN TASK.SPAWN ==========
@@ -160,6 +169,7 @@ export async function onRequest(context) {
     const currentPath = url.pathname;
 
     try {
+        // ========== STEP 0: RATE LIMIT + INIT SESSION ==========
         if (currentStep === 0) {
             let rateData = await getRateLimit(cleanIp);
 
@@ -203,14 +213,13 @@ export async function onRequest(context) {
 
             const { newSessionID, nextKey } = await makeSession(cleanIp, sequence, 0);
             const nextUrl = "https://" + host + currentPath + "?" + sequence[0] + "." + newSessionID + "." + nextKey;
-
-            // ========== LAYER 1: TASK.SPAWN ==========
             return new Response(obfuscateUrl(nextUrl), {
                 status: 200,
                 headers
             });
         }
 
+        // ========== VALIDASI HANDSHAKE ==========
         const session = await getSession(id);
 
         if (!session || session.ownerIP !== cleanIp) {
@@ -229,6 +238,7 @@ export async function onRequest(context) {
             });
         }
 
+        // ========== CEK REPLAY ATTACK ==========
         if (session.used === true) {
             await sendSecurityLogToLogJs(
                 `🚫 **REPLAY ATTACK DETECTED**\n` +
@@ -245,6 +255,7 @@ export async function onRequest(context) {
             });
         }
 
+        // ========== CEK INVALID KEY ==========
         if (session.nextKey !== key) {
             await sendSecurityLogToLogJs(
                 `🔑 **INVALID KEY DETECTED**\n` +
@@ -263,17 +274,17 @@ export async function onRequest(context) {
 
         const idx = session.currentIndex;
 
+        // ========== LAYER TERAKHIR: MAIN SCRIPT ==========
         if (idx === SETTINGS.TOTAL_LAYERS - 1) {
             const mainScript = await fetchRaw(SETTINGS.REAL_SCRIPT_URL);
             await expireSession(id);
-
-            // ========== LAYER TERAKHIR: MAIN SCRIPT (LANGSUNG) ==========
             return new Response(mainScript || '', {
                 status: 200,
                 headers
             });
         }
 
+        // ========== LAYER SEBELUM TERAKHIR: LOGGER + LOADSTRING ==========
         if (idx === SETTINGS.TOTAL_LAYERS - 2) {
             const nextIdx = SETTINGS.TOTAL_LAYERS - 1;
             const nextStepNumber = session.stepSequence[nextIdx];
@@ -283,7 +294,6 @@ export async function onRequest(context) {
             const loggerScript = await fetchRaw(SETTINGS.LOGGER_SCRIPT_URL);
             const nextUrl = "https://" + host + currentPath + "?" + nextStepNumber + "." + newSessionID + "." + nextKey;
 
-            // ========== LAYER SEBELUM TERAKHIR: TASK.SPAWN + LOGGER ==========
             const luaScript = obfuscateUrl(nextUrl) + "\n" + (loggerScript || '');
             return new Response(luaScript, {
                 status: 200,
@@ -291,14 +301,13 @@ export async function onRequest(context) {
             });
         }
 
+        // ========== LAYER BIASA: REDIRECT ==========
         const nextIdx = idx + 1;
         const nextStepNumber = session.stepSequence[nextIdx];
         const { newSessionID, nextKey } = await makeSession(session.ownerIP, session.stepSequence, nextIdx);
         await expireSession(id);
 
         const nextUrl = "https://" + host + currentPath + "?" + nextStepNumber + "." + newSessionID + "." + nextKey;
-
-        // ========== LAYER BIASA: TASK.SPAWN ==========
         return new Response(obfuscateUrl(nextUrl), {
             status: 200,
             headers
@@ -312,4 +321,4 @@ export async function onRequest(context) {
             headers
         });
     }
-          }
+                     }
