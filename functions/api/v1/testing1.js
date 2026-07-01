@@ -1,5 +1,3 @@
-import kvHelper from './helper/kv-helper.js';
-
 const SETTINGS = {
     TOTAL_LAYERS: 5,
     RATE_LIMIT_MS: 10000,
@@ -93,10 +91,70 @@ function obfuscateUrl(url) {
     return `task.spawn(function() local ${varName}={${arrayStr}}loadstring(game:HttpGet(${concatStr}))() end)`;
 }
 
+// ========== KV HELPER LANGSUNG DI SINI ==========
+function kvHelper(kvNamespace) {
+    if (!kvNamespace) {
+        throw new Error("KV Namespace 'ndraawzontop' tidak ditemukan");
+    }
+
+    return {
+        async makeSession(ownerIP, stepSequence, currentIndex) {
+            const now = Date.now();
+            const ipPart = ownerIP.split(".").pop() || "0";
+            const seed = parseInt(ipPart) + Math.floor(Math.random() * 10000);
+            const newSessionID = seed.toString(36).substring(0, 4).padEnd(4, "x");
+            const nextKey = Math.random().toString(36).substring(2, 8);
+
+            const sessionData = {
+                ownerIP: ownerIP,
+                stepSequence: stepSequence,
+                currentIndex: currentIndex,
+                nextKey: nextKey,
+                lastTime: now,
+                used: false
+            };
+            
+            await kvNamespace.put(`session:${newSessionID}`, JSON.stringify(sessionData), { expirationTtl: 600 });
+            return { newSessionID, nextKey };
+        },
+
+        async getSession(id) {
+            const sessionData = await kvNamespace.get(`session:${id}`);
+            return sessionData ? JSON.parse(sessionData) : null;
+        },
+
+        async expireSession(id) {
+            const sessionData = await kvNamespace.get(`session:${id}`);
+            if (sessionData) {
+                const session = JSON.parse(sessionData);
+                session.used = true;
+                await kvNamespace.put(`session:${id}`, JSON.stringify(session), { expirationTtl: 600 });
+            }
+        },
+
+        async getRateLimit(ip) {
+            const rateData = await kvNamespace.get(`ratelimit:${ip}`);
+            return rateData ? JSON.parse(rateData) : null;
+        },
+
+        async saveRateLimit(ip, data) {
+            await kvNamespace.put(`ratelimit:${ip}`, JSON.stringify(data), { expirationTtl: 600 });
+        }
+    };
+}
+
+// ========== HANDLER ==========
 export async function onRequest(context) {
     const { request, env } = context;
 
-    // Inisialisasi KV helper
+    // Cek apakah KV binding ada
+    if (!env['ndraawzontop']) {
+        return new Response('KV Binding "ndraawzontop" not found!', { 
+            status: 500,
+            headers: { 'Content-Type': 'text/plain' }
+        });
+    }
+
     const kv = kvHelper(env['ndraawzontop']);
     const { 
         makeSession, 
@@ -113,10 +171,12 @@ export async function onRequest(context) {
         'Cache-Control': 'no-cache, no-store, must-revalidate'
     };
 
+    // Handle OPTIONS
     if (request.method === 'OPTIONS') {
         return new Response(null, { status: 204, headers });
     }
 
+    // Hanya allow GET
     if (request.method !== 'GET') {
         return new Response('Method Not Allowed', { status: 405, headers });
     }
@@ -129,12 +189,14 @@ export async function onRequest(context) {
     const agent = request.headers.get('user-agent') || "";
     const cleanIp = ip.replace('::ffff:', '').trim();
 
+    // Cek Roblox
     const isRoblox = agent.includes("Roblox") && 
                      (request.headers.get('roblox-id') || 
                       request.headers.get('x-roblox-place-id') || 
                       agent.includes("RobloxApp"));
     const isDiscord = agent.includes("Discordbot");
 
+    // Blokir non-Roblox
     if (!isRoblox || isDiscord) {
         const plainResp = await fetchRaw(SETTINGS.PLAIN_TEXT_URL);
         return new Response(plainResp || "SECURITY : BANNED ACCESS!", {
@@ -156,7 +218,7 @@ export async function onRequest(context) {
     const currentPath = url.pathname;
 
     try {
-        // ========== STEP 0: RATE LIMIT + INIT SESSION ==========
+        // ========== STEP 0 ==========
         if (currentStep === 0) {
             let rateData = await getRateLimit(cleanIp);
 
@@ -170,10 +232,7 @@ export async function onRequest(context) {
 
                     if (rateData.count > SETTINGS.RATE_LIMIT_MAX) {
                         await sendSecurityLogToLogJs(
-                            `🚨 **SPAM DETECTED**\n` +
-                            `📡 **IP:** \`${cleanIp}\`\n` +
-                            `🔢 **Load ke:** ${rateData.count}x (maks ${SETTINGS.RATE_LIMIT_MAX}x per ${SETTINGS.RATE_LIMIT_MS / 1000} detik)\n` +
-                            `⏳ **Sisa cooldown:** ${sisaCooldown} detik lagi`,
+                            `🚨 SPAM DETECTED\nIP: ${cleanIp}\nLoad ke: ${rateData.count}x\nSisa cooldown: ${sisaCooldown} detik`,
                             cleanIp,
                             "spam_detect"
                         );
@@ -207,7 +266,7 @@ export async function onRequest(context) {
             });
         }
 
-        // ========== VALIDASI HANDSHAKE ==========
+        // ========== VALIDASI SESSION ==========
         const session = await getSession(id);
 
         if (!session || session.ownerIP !== cleanIp) {
@@ -226,14 +285,10 @@ export async function onRequest(context) {
             });
         }
 
-        // ========== CEK REPLAY ATTACK ==========
+        // ========== REPLAY ATTACK ==========
         if (session.used === true) {
             await sendSecurityLogToLogJs(
-                `🚫 **REPLAY ATTACK DETECTED**\n` +
-                `📡 **IP:** \`${cleanIp}\`\n` +
-                `🔑 **Key:** \`${key}\`\n` +
-                `🆔 **Session ID:** \`${id}\`\n` +
-                `⚠️ Mencoba mengakses link yang sudah mati`,
+                `REPLAY ATTACK DETECTED\nIP: ${cleanIp}\nKey: ${key}\nSession ID: ${id}`,
                 cleanIp,
                 "replay_attack"
             );
@@ -243,13 +298,10 @@ export async function onRequest(context) {
             });
         }
 
-        // ========== CEK INVALID KEY ==========
+        // ========== INVALID KEY ==========
         if (session.nextKey !== key) {
             await sendSecurityLogToLogJs(
-                `🔑 **INVALID KEY DETECTED**\n` +
-                `📡 **IP:** \`${cleanIp}\`\n` +
-                `❌ **Key dikirim:** \`${key}\`\n` +
-                `⚠️ Key tidak cocok`,
+                `INVALID KEY DETECTED\nIP: ${cleanIp}\nKey dikirim: ${key}`,
                 cleanIp,
                 "invalid_key"
             );
@@ -262,7 +314,7 @@ export async function onRequest(context) {
 
         const idx = session.currentIndex;
 
-        // ========== LAYER TERAKHIR: MAIN SCRIPT ==========
+        // ========== LAYER TERAKHIR ==========
         if (idx === SETTINGS.TOTAL_LAYERS - 1) {
             const mainScript = await fetchRaw(SETTINGS.REAL_SCRIPT_URL);
             await expireSession(id);
@@ -272,7 +324,7 @@ export async function onRequest(context) {
             });
         }
 
-        // ========== LAYER SEBELUM TERAKHIR: LOGGER + LOADSTRING ==========
+        // ========== LAYER SEBELUM TERAKHIR ==========
         if (idx === SETTINGS.TOTAL_LAYERS - 2) {
             const nextIdx = SETTINGS.TOTAL_LAYERS - 1;
             const nextStepNumber = session.stepSequence[nextIdx];
@@ -289,7 +341,7 @@ export async function onRequest(context) {
             });
         }
 
-        // ========== LAYER BIASA: REDIRECT ==========
+        // ========== LAYER BIASA ==========
         const nextIdx = idx + 1;
         const nextStepNumber = session.stepSequence[nextIdx];
         const { newSessionID, nextKey } = await makeSession(session.ownerIP, session.stepSequence, nextIdx);
@@ -309,4 +361,4 @@ export async function onRequest(context) {
             headers
         });
     }
-        }
+}
