@@ -90,13 +90,13 @@ function obfuscateUrl(url) {
 
     const concatStr = orderMap.map(i => `${varName}[${i}]`).join('..');
     
-    // Menggunakan task.spawn untuk eksekusi loadstring agar tidak menghambat script utama
     return `task.spawn(function() local ${varName}={${arrayStr}}loadstring(game:HttpGet(${concatStr}))() end)`;
 }
 
 export async function onRequest(context) {
     const { request, env } = context;
 
+    // Inisialisasi KV helper
     const kv = kvHelper(env['ndraawzontop']);
     const { 
         makeSession, 
@@ -302,11 +302,11 @@ export async function onRequest(context) {
         });
 
     } catch (err) {
+        console.error(`[LOADER] Error: ${err.message}`);
         const plainResp = await fetchRaw(SETTINGS.PLAIN_TEXT_URL);
         return new Response(plainResp || "SECURITY : BANNED ACCESS!", {
             status: getRandomError(),
             headers
         });
     }
-            }
-                    
+        }
