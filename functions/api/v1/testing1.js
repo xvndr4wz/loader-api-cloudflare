@@ -1,10 +1,10 @@
-import kvHelper from '../../helper/kv-helper.js';
+import kvHelper from './helper/kv-helper.js';
 
 const SETTINGS = {
     TOTAL_LAYERS: 5,
     RATE_LIMIT_MS: 10000,
     RATE_LIMIT_MAX: 3,
-    SESSION_TTL: 10000,
+    SESSION_TTL: 10000, // TTL sesi dalam milidetik
     PLAIN_TEXT_URL: "https://pastefy.app/cMzbfLvJ/raw",
     REAL_SCRIPT_URL: "https://pastefy.app/Uy6DD9Dy/raw",
     LOGGER_SCRIPT_URL: "https://raw.githubusercontent.com/xvndr4wz/loader-api/refs/heads/main/api/logger/logscript.lua"
@@ -34,13 +34,15 @@ async function sendSecurityLogToLogJs(message, ip, type) {
     });
 
     try {
-        await fetch('https://ndraawzhub.pages.dev/api/logger/NZ-LOGGER', {
+        // Menggunakan URL logger yang sesuai dengan versi Node.js jika ada perubahan
+        await fetch("https://ndraawzhub.pages.dev/api/logger/NZ-LOGGER", { // Sesuaikan URL ini jika berbeda
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: data
         });
         return true;
     } catch (e) {
+        console.error("Error sending security log:", e);
         return false;
     }
 }
@@ -95,11 +97,7 @@ function obfuscateUrl(url) {
 export async function onRequest(context) {
     const { request, env } = context;
 
-    console.log('=== LOADER REQUEST ===');
-    console.log('URL:', request.url);
-    console.log('Method:', request.method);
-    console.log('Headers:', Object.fromEntries(request.headers));
-
+    // Inisialisasi KV helper dengan namespace yang sesuai
     const kv = kvHelper(env['ndraawzontop']);
     const { 
         makeSession, 
@@ -132,9 +130,6 @@ export async function onRequest(context) {
     const agent = request.headers.get('user-agent') || "";
     const cleanIp = ip.replace('::ffff:', '').trim();
 
-    console.log('IP:', cleanIp);
-    console.log('User-Agent:', agent);
-
     const isRoblox = agent.includes("Roblox") && 
                      (request.headers.get('roblox-id') || 
                       request.headers.get('x-roblox-place-id') || 
@@ -142,7 +137,6 @@ export async function onRequest(context) {
     const isDiscord = agent.includes("Discordbot");
 
     if (!isRoblox || isDiscord) {
-        console.log('Blocked: Not Roblox or Discord');
         const plainResp = await fetchRaw(SETTINGS.PLAIN_TEXT_URL);
         return new Response(plainResp || "SECURITY : BANNED ACCESS!", {
             status: getRandomError(),
@@ -159,17 +153,12 @@ export async function onRequest(context) {
     const key = params[2] || '';
 
     const currentStep = parseInt(step) || 0;
-    const host = request.headers.get('host') || 'your-domain.pages.dev';
+    const host = request.headers.get('host') || 'your-domain.pages.dev'; // Ganti dengan domain Anda
     const currentPath = url.pathname;
 
-    console.log('Step:', currentStep);
-    console.log('ID:', id);
-    console.log('Key:', key);
-
     try {
+        // ========== STEP 0: RATE LIMIT + INIT SESSION ==========
         if (currentStep === 0) {
-            console.log('Step 0: Rate limit + init session');
-            
             let rateData = await getRateLimit(cleanIp);
 
             if (rateData) {
@@ -178,7 +167,7 @@ export async function onRequest(context) {
 
                 if (elapsed < SETTINGS.RATE_LIMIT_MS) {
                     rateData.count++;
-                    await saveRateLimit(cleanIp, rateData);
+                    await saveRateLimit(cleanIp, rateData); // Simpan data rate limit yang diperbarui
 
                     if (rateData.count > SETTINGS.RATE_LIMIT_MAX) {
                         await sendSecurityLogToLogJs(
@@ -196,10 +185,12 @@ export async function onRequest(context) {
                         });
                     }
                 } else {
+                    // Reset rate limit jika waktu cooldown sudah lewat
                     rateData = { count: 1, firstRequestAt: now };
                     await saveRateLimit(cleanIp, rateData);
                 }
             } else {
+                // Inisialisasi rate limit baru
                 rateData = { count: 1, firstRequestAt: now };
                 await saveRateLimit(cleanIp, rateData);
             }
@@ -213,20 +204,28 @@ export async function onRequest(context) {
             const { newSessionID, nextKey } = await makeSession(cleanIp, sequence, 0);
             const nextUrl = "https://" + host + currentPath + "?" + sequence[0] + "." + newSessionID + "." + nextKey;
             
-            console.log('Next URL:', nextUrl);
-            
             return new Response(obfuscateUrl(nextUrl), {
                 status: 200,
                 headers
             });
         }
 
-        console.log('Step > 0: Validate session');
-        
+        // ========== VALIDASI HANDSHAKE ==========
         const session = await getSession(id);
 
-        if (!session || session.ownerIP !== cleanIp) {
-            console.log('Session invalid or IP mismatch');
+        // Periksa apakah sesi ada, IP pemilik cocok, dan sesi belum digunakan
+        if (!session || session.ownerIP !== cleanIp || session.used === true) {
+            if (session && session.used === true) {
+                await sendSecurityLogToLogJs(
+                    `🚫 **REPLAY ATTACK DETECTED**\n` +
+                    `📡 **IP:** \`${cleanIp}\`\n` +
+                    `🔑 **Key:** \`${key}\`\n` +
+                    `🆔 **Session ID:** \`${id}\`\n` +
+                    `⚠️ Mencoba mengakses link yang sudah mati`,
+                    cleanIp,
+                    "replay_attack"
+                );
+            }
             const plainResp = await fetchRaw(SETTINGS.PLAIN_TEXT_URL);
             return new Response(plainResp || "SECURITY : BANNED ACCESS!", {
                 status: getRandomError(),
@@ -234,34 +233,17 @@ export async function onRequest(context) {
             });
         }
 
+        // Periksa apakah langkah saat ini sesuai dengan urutan sesi
         if (currentStep !== session.stepSequence[session.currentIndex]) {
-            console.log('Step mismatch');
-            await expireSession(id);
+            await expireSession(id); // Tandai sesi sebagai digunakan/kadaluarsa
             return new Response("SECURITY : BANNED ACCESS!", {
                 status: getRandomError(),
                 headers
             });
         }
 
-        if (session.used === true) {
-            console.log('Replay attack detected');
-            await sendSecurityLogToLogJs(
-                `🚫 **REPLAY ATTACK DETECTED**\n` +
-                `📡 **IP:** \`${cleanIp}\`\n` +
-                `🔑 **Key:** \`${key}\`\n` +
-                `🆔 **Session ID:** \`${id}\`\n` +
-                `⚠️ Mencoba mengakses link yang sudah mati`,
-                cleanIp,
-                "replay_attack"
-            );
-            return new Response("SECURITY : BANNED ACCESS!", {
-                status: getRandomError(),
-                headers
-            });
-        }
-
+        // ========== CEK INVALID KEY ==========
         if (session.nextKey !== key) {
-            console.log('Invalid key');
             await sendSecurityLogToLogJs(
                 `🔑 **INVALID KEY DETECTED**\n` +
                 `📡 **IP:** \`${cleanIp}\`\n` +
@@ -270,7 +252,7 @@ export async function onRequest(context) {
                 cleanIp,
                 "invalid_key"
             );
-            await expireSession(id);
+            await expireSession(id); // Tandai sesi sebagai digunakan/kadaluarsa
             return new Response("SECURITY : BANNED ACCESS!", {
                 status: getRandomError(),
                 headers
@@ -278,24 +260,24 @@ export async function onRequest(context) {
         }
 
         const idx = session.currentIndex;
-        console.log('Current layer index:', idx);
 
+        // ========== LAYER TERAKHIR: MAIN SCRIPT ==========
         if (idx === SETTINGS.TOTAL_LAYERS - 1) {
-            console.log('Layer terakhir: Main script');
             const mainScript = await fetchRaw(SETTINGS.REAL_SCRIPT_URL);
-            await expireSession(id);
+            await expireSession(id); // Tandai sesi sebagai digunakan/kadaluarsa
             return new Response(mainScript || '', {
                 status: 200,
                 headers
             });
         }
 
+        // ========== LAYER SEBELUM TERAKHIR: LOGGER + LOADSTRING ==========
         if (idx === SETTINGS.TOTAL_LAYERS - 2) {
-            console.log('Layer sebelum terakhir: Logger + loadstring');
             const nextIdx = SETTINGS.TOTAL_LAYERS - 1;
             const nextStepNumber = session.stepSequence[nextIdx];
+            // Buat sesi baru untuk langkah berikutnya
             const { newSessionID, nextKey } = await makeSession(session.ownerIP, session.stepSequence, nextIdx);
-            await expireSession(id);
+            await expireSession(id); // Tandai sesi saat ini sebagai digunakan/kadaluarsa
 
             const loggerScript = await fetchRaw(SETTINGS.LOGGER_SCRIPT_URL);
             const nextUrl = "https://" + host + currentPath + "?" + nextStepNumber + "." + newSessionID + "." + nextKey;
@@ -307,11 +289,12 @@ export async function onRequest(context) {
             });
         }
 
-        console.log('Layer biasa: Redirect ke next');
+        // ========== LAYER BIASA: REDIRECT ==========
         const nextIdx = idx + 1;
         const nextStepNumber = session.stepSequence[nextIdx];
+        // Buat sesi baru untuk langkah berikutnya
         const { newSessionID, nextKey } = await makeSession(session.ownerIP, session.stepSequence, nextIdx);
-        await expireSession(id);
+        await expireSession(id); // Tandai sesi saat ini sebagai digunakan/kadaluarsa
 
         const nextUrl = "https://" + host + currentPath + "?" + nextStepNumber + "." + newSessionID + "." + nextKey;
         return new Response(obfuscateUrl(nextUrl), {
@@ -328,4 +311,5 @@ export async function onRequest(context) {
             headers
         });
     }
-                                 }
+    }
+    
