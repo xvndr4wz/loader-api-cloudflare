@@ -4,3 +4,8 @@ compatibility_date = "2026-06-10"
 [[kv_namespaces]]
 binding = "ndraawzontop"
 id = "456fbd4b809a4d42abeab118350c6382"
+
+[[durable_objects.bindings]]
+name = "SESSION_DO"
+class_name = "SessionManager"
+script_name = "ndraawzontop-session-do"
