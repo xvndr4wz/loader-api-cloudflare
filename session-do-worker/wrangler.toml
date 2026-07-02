@@ -1,0 +1,11 @@
+name = "ndraawzontop-session-do"
+main = "src/index.js"
+compatibility_date = "2026-06-10"
+
+[[durable_objects.bindings]]
+name = "SESSION_DO"
+class_name = "SessionManager"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SessionManager"]
